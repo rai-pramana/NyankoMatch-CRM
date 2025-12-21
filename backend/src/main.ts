@@ -6,15 +6,41 @@ import { AppModule } from "./app.module";
 async function bootstrap() {
     const app = await NestFactory.create(AppModule);
 
-    // Enable CORS for localhost and network access
-    const allowedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000", "http://192.168.1.7:3000", "https://nyanko-match-crm.vercel.app"];
-    if (process.env.FRONTEND_URL) {
-        allowedOrigins.push(process.env.FRONTEND_URL);
-    }
-
+    // Enable CORS for localhost, network access, and Vercel deployments
     app.enableCors({
-        origin: allowedOrigins,
+        origin: (origin, callback) => {
+            const allowedOrigins = [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://192.168.1.7:3000",
+                "https://nyanko-match-crm.vercel.app",
+            ];
+            
+            // Add FRONTEND_URL from environment
+            if (process.env.FRONTEND_URL) {
+                allowedOrigins.push(process.env.FRONTEND_URL);
+            }
+
+            // Allow requests with no origin (mobile apps, Postman, etc.)
+            if (!origin) {
+                return callback(null, true);
+            }
+
+            // Allow all Vercel preview deployments
+            if (origin.endsWith('.vercel.app') || origin.endsWith('-rai-pramanas-projects.vercel.app')) {
+                return callback(null, true);
+            }
+
+            // Check against allowed origins
+            if (allowedOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+
+            callback(new Error('Not allowed by CORS'));
+        },
         credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     });
 
     // Global prefix
