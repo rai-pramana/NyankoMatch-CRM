@@ -1,0 +1,181 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+}
+
+enum DealStatus {
+  OPEN
+  WON
+  LOST
+}
+
+enum ActivityType {
+  CALL
+  EMAIL
+  MEETING
+  TASK
+  DEADLINE
+}
+
+enum ActivityStatus {
+  PENDING
+  COMPLETED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  name          String
+  role          UserRole  @default(MANAGER)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  countries     UserCountry[]
+  ownedDeals    Deal[]        @relation("DealOwner")
+  contacts      Contact[]     @relation("ContactCreator")
+  activities    Activity[]    @relation("ActivityAssignee")
+  createdActivities Activity[] @relation("ActivityCreator")
+  notes         Note[]
+
+  @@map("users")
+}
+
+model Country {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  code           String   @unique
+  currency       String   @default("EUR")
+  currencySymbol String   @default("€")
+  exchangeRate   Float    @default(1.0) // Exchange rate to EUR
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  users          UserCountry[]
+  contacts       Contact[]
+  deals          Deal[]
+
+  @@map("countries")
+}
+
+model UserCountry {
+  userId    String
+  countryId String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@id([userId, countryId])
+  @@map("user_countries")
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  phone     String?
+  company   String?
+  position  String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  countryId   String
+  country     Country @relation(fields: [countryId], references: [id])
+  createdById String
+  createdBy   User    @relation("ContactCreator", fields: [createdById], references: [id])
+  deals       Deal[]
+
+  @@map("contacts")
+}
+
+model PipelineStage {
+  id        String   @id @default(cuid())
+  name      String
+  order     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  deals     Deal[]
+
+  @@map("pipeline_stages")
+}
+
+model Deal {
+  id                String     @id @default(cuid())
+  name              String
+  value             Float      @default(0)
+  probability       Float      @default(0) // 0-100
+  expectedCloseDate DateTime?
+  status            DealStatus @default(OPEN)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  // Relations
+  stageId    String
+  stage      PipelineStage @relation(fields: [stageId], references: [id])
+  contactId  String
+  contact    Contact       @relation(fields: [contactId], references: [id])
+  ownerId    String
+  owner      User          @relation("DealOwner", fields: [ownerId], references: [id])
+  countryId  String
+  country    Country       @relation(fields: [countryId], references: [id])
+  activities Activity[]
+  notes      Note[]
+
+  @@map("deals")
+}
+
+model Activity {
+  id          String         @id @default(cuid())
+  title       String
+  description String?
+  type        ActivityType   @default(TASK)
+  status      ActivityStatus @default(PENDING)
+  dueDate     DateTime?
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  // Relations
+  dealId       String?
+  deal         Deal?   @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  assignedToId String
+  assignedTo   User    @relation("ActivityAssignee", fields: [assignedToId], references: [id])
+  createdById  String
+  createdBy    User    @relation("ActivityCreator", fields: [createdById], references: [id])
+
+  @@map("activities")
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  dealId    String
+  deal      Deal   @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User   @relation(fields: [userId], references: [id])
+
+  @@map("notes")
+}
