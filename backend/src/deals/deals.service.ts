@@ -1,309 +1,357 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { UserRole, DealStatus } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreateDealDto } from './dto/create-deal.dto';
-import { UpdateDealDto } from './dto/update-deal.dto';
+import { Injectable, NotFoundException } from "@nestjs/common";
+import { UserRole, DealStatus } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { CreateDealDto } from "./dto/create-deal.dto";
+import { UpdateDealDto } from "./dto/update-deal.dto";
+import { EventsGateway } from "../events/events.gateway";
 
 @Injectable()
 export class DealsService {
-  constructor(private prisma: PrismaService) {}
+    constructor(
+        private prisma: PrismaService,
+        private eventsGateway: EventsGateway
+    ) {}
 
-  async create(createDealDto: CreateDealDto, userId: string) {
-    return this.prisma.deal.create({
-      data: {
-        name: createDealDto.name,
-        value: createDealDto.value,
-        probability: createDealDto.probability,
-        expectedCloseDate: createDealDto.expectedCloseDate
-          ? new Date(createDealDto.expectedCloseDate)
-          : null,
-        stageId: createDealDto.stageId,
-        contactId: createDealDto.contactId,
-        countryId: createDealDto.countryId,
-        ownerId: userId,
-      },
-      include: {
-        stage: true,
-        contact: true,
-        country: true,
-        owner: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
-    });
-  }
-
-  async findAll(user: any, filters?: { countryId?: string; status?: DealStatus; stageId?: string }) {
-    const where: any = {};
-
-    // If user is a manager, filter by their assigned countries
-    if (user.role === UserRole.MANAGER) {
-      const countryIds = user.countries.map((c: any) => c.id);
-      where.countryId = { in: countryIds };
-    }
-
-    // Additional filters
-    if (filters?.countryId) {
-      where.countryId = filters.countryId;
-    }
-    if (filters?.status) {
-      where.status = filters.status;
-    }
-    if (filters?.stageId) {
-      where.stageId = filters.stageId;
-    }
-
-    const deals = await this.prisma.deal.findMany({
-      where,
-      include: {
-        stage: true,
-        contact: true,
-        country: true,
-        owner: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-        _count: {
-          select: {
-            activities: true,
-            notes: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    return deals;
-  }
-
-  async findByStage(user: any, countryId?: string) {
-    const where: any = {};
-
-    if (user.role === UserRole.MANAGER) {
-      const countryIds = user.countries.map((c: any) => c.id);
-      where.countryId = { in: countryIds };
-    }
-
-    if (countryId) {
-      where.countryId = countryId;
-    }
-
-    const stages = await this.prisma.pipelineStage.findMany({
-      orderBy: { order: 'asc' },
-      include: {
-        deals: {
-          where: {
-            ...where,
-            status: DealStatus.OPEN,
-          },
-          include: {
-            contact: true,
-            owner: {
-              select: {
-                id: true,
-                name: true,
-              },
+    async create(createDealDto: CreateDealDto, userId: string) {
+        const deal = await this.prisma.deal.create({
+            data: {
+                name: createDealDto.name,
+                value: createDealDto.value,
+                probability: createDealDto.probability,
+                expectedCloseDate: createDealDto.expectedCloseDate ? new Date(createDealDto.expectedCloseDate) : null,
+                stageId: createDealDto.stageId,
+                contactId: createDealDto.contactId,
+                countryId: createDealDto.countryId,
+                ownerId: userId,
             },
-          },
-        },
-      },
-    });
-
-    return stages.map((stage) => ({
-      ...stage,
-      totalValue: stage.deals.reduce((sum, deal) => sum + deal.value, 0),
-      dealCount: stage.deals.length,
-    }));
-  }
-
-  async findOne(id: string) {
-    const deal = await this.prisma.deal.findUnique({
-      where: { id },
-      include: {
-        stage: true,
-        contact: true,
-        country: true,
-        owner: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-        activities: {
-          orderBy: { createdAt: 'desc' },
-          include: {
-            assignedTo: {
-              select: {
-                id: true,
-                name: true,
-              },
+            include: {
+                stage: true,
+                contact: true,
+                country: true,
+                owner: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                    },
+                },
             },
-          },
-        },
-        notes: {
-          orderBy: { createdAt: 'desc' },
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-              },
+        });
+
+        this.eventsGateway.emitDataChange({
+            entity: "deals",
+            action: "created",
+            data: deal,
+            userId,
+        });
+
+        // Also refresh dashboard
+        this.eventsGateway.emitRefresh("dashboard");
+
+        return deal;
+    }
+
+    async findAll(user: any, filters?: { countryId?: string; status?: DealStatus; stageId?: string }) {
+        const where: any = {};
+
+        // If user is a manager, filter by their assigned countries
+        if (user.role === UserRole.MANAGER) {
+            const countryIds = user.countries.map((c: any) => c.id);
+            where.countryId = { in: countryIds };
+        }
+
+        // Additional filters
+        if (filters?.countryId) {
+            where.countryId = filters.countryId;
+        }
+        if (filters?.status) {
+            where.status = filters.status;
+        }
+        if (filters?.stageId) {
+            where.stageId = filters.stageId;
+        }
+
+        const deals = await this.prisma.deal.findMany({
+            where,
+            include: {
+                stage: true,
+                contact: true,
+                country: true,
+                owner: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                    },
+                },
+                _count: {
+                    select: {
+                        activities: true,
+                        notes: true,
+                    },
+                },
             },
-          },
-        },
-      },
-    });
+            orderBy: { createdAt: "desc" },
+        });
 
-    if (!deal) {
-      throw new NotFoundException('Deal not found');
+        return deals;
     }
 
-    return deal;
-  }
+    async findByStage(user: any, countryId?: string) {
+        const where: any = {};
 
-  async update(id: string, updateDealDto: UpdateDealDto) {
-    const deal = await this.prisma.deal.findUnique({
-      where: { id },
-    });
+        if (user.role === UserRole.MANAGER) {
+            const countryIds = user.countries.map((c: any) => c.id);
+            where.countryId = { in: countryIds };
+        }
 
-    if (!deal) {
-      throw new NotFoundException('Deal not found');
+        if (countryId) {
+            where.countryId = countryId;
+        }
+
+        const stages = await this.prisma.pipelineStage.findMany({
+            orderBy: { order: "asc" },
+            include: {
+                deals: {
+                    where: {
+                        ...where,
+                        status: DealStatus.OPEN,
+                    },
+                    include: {
+                        contact: true,
+                        owner: {
+                            select: {
+                                id: true,
+                                name: true,
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        return stages.map((stage) => ({
+            ...stage,
+            totalValue: stage.deals.reduce((sum, deal) => sum + deal.value, 0),
+            dealCount: stage.deals.length,
+        }));
     }
 
-    return this.prisma.deal.update({
-      where: { id },
-      data: {
-        name: updateDealDto.name,
-        value: updateDealDto.value,
-        probability: updateDealDto.probability,
-        expectedCloseDate: updateDealDto.expectedCloseDate
-          ? new Date(updateDealDto.expectedCloseDate)
-          : undefined,
-        stageId: updateDealDto.stageId,
-        contactId: updateDealDto.contactId,
-        countryId: updateDealDto.countryId,
-        status: updateDealDto.status,
-      },
-      include: {
-        stage: true,
-        contact: true,
-        country: true,
-        owner: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
-    });
-  }
+    async findOne(id: string) {
+        const deal = await this.prisma.deal.findUnique({
+            where: { id },
+            include: {
+                stage: true,
+                contact: true,
+                country: true,
+                owner: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                    },
+                },
+                activities: {
+                    orderBy: { createdAt: "desc" },
+                    include: {
+                        assignedTo: {
+                            select: {
+                                id: true,
+                                name: true,
+                            },
+                        },
+                    },
+                },
+                notes: {
+                    orderBy: { createdAt: "desc" },
+                    include: {
+                        user: {
+                            select: {
+                                id: true,
+                                name: true,
+                            },
+                        },
+                    },
+                },
+            },
+        });
 
-  async moveToStage(id: string, stageId: string) {
-    const deal = await this.prisma.deal.findUnique({
-      where: { id },
-    });
+        if (!deal) {
+            throw new NotFoundException("Deal not found");
+        }
 
-    if (!deal) {
-      throw new NotFoundException('Deal not found');
+        return deal;
     }
 
-    return this.prisma.deal.update({
-      where: { id },
-      data: { stageId },
-      include: {
-        stage: true,
-      },
-    });
-  }
+    async update(id: string, updateDealDto: UpdateDealDto) {
+        const deal = await this.prisma.deal.findUnique({
+            where: { id },
+        });
 
-  async updateStatus(id: string, status: DealStatus) {
-    const deal = await this.prisma.deal.findUnique({
-      where: { id },
-    });
+        if (!deal) {
+            throw new NotFoundException("Deal not found");
+        }
 
-    if (!deal) {
-      throw new NotFoundException('Deal not found');
+        const updatedDeal = await this.prisma.deal.update({
+            where: { id },
+            data: {
+                name: updateDealDto.name,
+                value: updateDealDto.value,
+                probability: updateDealDto.probability,
+                expectedCloseDate: updateDealDto.expectedCloseDate ? new Date(updateDealDto.expectedCloseDate) : undefined,
+                stageId: updateDealDto.stageId,
+                contactId: updateDealDto.contactId,
+                countryId: updateDealDto.countryId,
+                status: updateDealDto.status,
+            },
+            include: {
+                stage: true,
+                contact: true,
+                country: true,
+                owner: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                    },
+                },
+            },
+        });
+
+        this.eventsGateway.emitDataChange({
+            entity: "deals",
+            action: "updated",
+            data: updatedDeal,
+        });
+
+        this.eventsGateway.emitRefresh("dashboard");
+
+        return updatedDeal;
     }
 
-    return this.prisma.deal.update({
-      where: { id },
-      data: { status },
-      include: {
-        stage: true,
-        contact: true,
-      },
-    });
-  }
+    async moveToStage(id: string, stageId: string) {
+        const deal = await this.prisma.deal.findUnique({
+            where: { id },
+        });
 
-  async remove(id: string) {
-    const deal = await this.prisma.deal.findUnique({
-      where: { id },
-    });
+        if (!deal) {
+            throw new NotFoundException("Deal not found");
+        }
 
-    if (!deal) {
-      throw new NotFoundException('Deal not found');
+        const updatedDeal = await this.prisma.deal.update({
+            where: { id },
+            data: { stageId },
+            include: {
+                stage: true,
+            },
+        });
+
+        this.eventsGateway.emitDataChange({
+            entity: "deals",
+            action: "updated",
+            data: updatedDeal,
+        });
+
+        return updatedDeal;
     }
 
-    await this.prisma.deal.delete({
-      where: { id },
-    });
+    async updateStatus(id: string, status: DealStatus) {
+        const deal = await this.prisma.deal.findUnique({
+            where: { id },
+        });
 
-    return { message: 'Deal deleted successfully' };
-  }
+        if (!deal) {
+            throw new NotFoundException("Deal not found");
+        }
 
-  async getStatistics(user: any, countryId?: string) {
-    const where: any = {};
+        const updatedDeal = await this.prisma.deal.update({
+            where: { id },
+            data: { status },
+            include: {
+                stage: true,
+                contact: true,
+            },
+        });
 
-    if (user.role === UserRole.MANAGER) {
-      const countryIds = user.countries.map((c: any) => c.id);
-      where.countryId = { in: countryIds };
+        this.eventsGateway.emitDataChange({
+            entity: "deals",
+            action: "updated",
+            data: updatedDeal,
+        });
+
+        this.eventsGateway.emitRefresh("dashboard");
+
+        return updatedDeal;
     }
 
-    if (countryId) {
-      where.countryId = countryId;
+    async remove(id: string) {
+        const deal = await this.prisma.deal.findUnique({
+            where: { id },
+        });
+
+        if (!deal) {
+            throw new NotFoundException("Deal not found");
+        }
+
+        await this.prisma.deal.delete({
+            where: { id },
+        });
+
+        this.eventsGateway.emitDataChange({
+            entity: "deals",
+            action: "deleted",
+            data: { id },
+        });
+
+        this.eventsGateway.emitRefresh("dashboard");
+
+        return { message: "Deal deleted successfully" };
     }
 
-    const [totalDeals, wonDeals, openDeals, lostDeals] = await Promise.all([
-      this.prisma.deal.aggregate({
-        where,
-        _sum: { value: true },
-        _count: true,
-      }),
-      this.prisma.deal.aggregate({
-        where: { ...where, status: DealStatus.WON },
-        _sum: { value: true },
-        _count: true,
-      }),
-      this.prisma.deal.aggregate({
-        where: { ...where, status: DealStatus.OPEN },
-        _sum: { value: true },
-        _count: true,
-      }),
-      this.prisma.deal.aggregate({
-        where: { ...where, status: DealStatus.LOST },
-        _sum: { value: true },
-        _count: true,
-      }),
-    ]);
+    async getStatistics(user: any, countryId?: string) {
+        const where: any = {};
 
-    return {
-      totalPipelineValue: totalDeals._sum.value || 0,
-      totalDeals: totalDeals._count,
-      wonDeals: wonDeals._count,
-      wonValue: wonDeals._sum.value || 0,
-      openDeals: openDeals._count,
-      openValue: openDeals._sum.value || 0,
-      lostDeals: lostDeals._count,
-      lostValue: lostDeals._sum.value || 0,
-    };
-  }
+        if (user.role === UserRole.MANAGER) {
+            const countryIds = user.countries.map((c: any) => c.id);
+            where.countryId = { in: countryIds };
+        }
+
+        if (countryId) {
+            where.countryId = countryId;
+        }
+
+        const [totalDeals, wonDeals, openDeals, lostDeals] = await Promise.all([
+            this.prisma.deal.aggregate({
+                where,
+                _sum: { value: true },
+                _count: true,
+            }),
+            this.prisma.deal.aggregate({
+                where: { ...where, status: DealStatus.WON },
+                _sum: { value: true },
+                _count: true,
+            }),
+            this.prisma.deal.aggregate({
+                where: { ...where, status: DealStatus.OPEN },
+                _sum: { value: true },
+                _count: true,
+            }),
+            this.prisma.deal.aggregate({
+                where: { ...where, status: DealStatus.LOST },
+                _sum: { value: true },
+                _count: true,
+            }),
+        ]);
+
+        return {
+            totalPipelineValue: totalDeals._sum.value || 0,
+            totalDeals: totalDeals._count,
+            wonDeals: wonDeals._count,
+            wonValue: wonDeals._sum.value || 0,
+            openDeals: openDeals._count,
+            openValue: openDeals._sum.value || 0,
+            lostDeals: lostDeals._count,
+            lostValue: lostDeals._sum.value || 0,
+        };
+    }
 }
