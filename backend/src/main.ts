@@ -7,7 +7,7 @@ async function bootstrap() {
     const app = await NestFactory.create(AppModule);
 
     // Enable CORS for localhost and network access
-    const allowedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000", "http://192.168.1.7:3000"];
+    const allowedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000", "http://192.168.1.7:3000", "https://nyanko-match-crm.vercel.app"];
     if (process.env.FRONTEND_URL) {
         allowedOrigins.push(process.env.FRONTEND_URL);
     }
